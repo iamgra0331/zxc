@@ -1,66 +1,38 @@
-# 拔河賽自動賽程表（備份站・Firebase）
+# 拔河賽自動賽程表（備份站・Supabase）
 
-> 本 repo 是備份網頁，使用獨立的備份 Firebase 資料庫。主站：[lzfschool/autosche](https://github.com/lzfschool/autosche)（Firebase）、對照版：[lzfschool/autosche_supa](https://github.com/lzfschool/autosche_supa)（Supabase）。三者 `index.html` 相同，只差在設定檔。
+> 備份站，使用獨立的備份 Supabase 資料庫。主站：[lzfschool/autosche](https://github.com/lzfschool/autosche)（Firebase）、對照版：[lzfschool/autosche_supa](https://github.com/lzfschool/autosche_supa)（Supabase）。三者 `index.html` 相同，只差在設定檔。舊的 Python 伺服器版在 `legacy-本機伺服器版/`。
 
-純前端網頁版，**不需要電腦開著跑伺服器**，直接放在 GitHub Pages 就能使用。
-支援手機、平板、大螢幕；設定 Firebase 後可多裝置即時同步。
-
-## 功能
-
-- 多組別賽程（高一、高二、高三、自訂），隨機抽籤、點選勝隊自動晉級、季殿軍賽、頒獎台
-- **觀眾唯讀網址**（`?view=1`）：只能看，不會誤觸修改比分
-- **裁判／管理者網址**：可點選勝隊、修改名單
-- 真正可掃描的 QR Code，方便手機開啟
-- 匯出／匯入 JSON 備份
-- 兩種同步模式：
-  | 模式 | 條件 | 同步範圍 |
-  |---|---|---|
-  | 💾 單機模式 | `firebase-config.js` 維持 `null`（預設） | 同一台電腦、同一瀏覽器的多個分頁（例：一個分頁操作，一個分頁投影） |
-  | 🟢 雲端同步 | 填入 Firebase 設定 | 所有開啟網址的裝置即時同步 |
+- 網頁：`https://iamgra0331.github.io/zxc/`
+- 觀眾唯讀：`https://iamgra0331.github.io/zxc/?view=1`
 
 ## 檔案說明
 
-- `index.html`：主程式（全部前端邏輯）
-- `firebase-config.js`：雲端同步設定（可留空）
-- `supabase-config.js`：Supabase 設定，本版保持 `null`
-- `tournament_data.json`：初始賽程資料。瀏覽器第一次開啟、而且還沒有本機資料時會讀取它
-- `legacy-本機伺服器版/`：舊的 Python 伺服器與 Cloudflare 穿透版本，已不再使用，只留作參考
+| 檔案 | 用途 |
+|---|---|
+| `index.html` | 主程式（與 Firebase 版相同） |
+| `supabase-config.js` | Supabase 連線設定（Project URL ＋ anon / publishable key） |
+| `supabase-setup.sql` | 建立資料表、權限、Realtime 的 SQL |
+| `firebase-config.js` | 本版保持 `null`（不使用 Firebase） |
+| `.github/workflows/supabase-keepalive.yml` | **每日喚醒**：每天台灣時間 08:00 寫入一次資料庫，避免免費專案因 7 天閒置被暫停 |
+| `tournament_data.json` | 初始賽程資料 |
 
-## 部署到 GitHub Pages
+## 設定步驟
 
-1. 在 GitHub 建立一個新的 repository（例如 `tug-of-war`），把本資料夾的檔案上傳或 push 上去。
-2. 進入 repository → **Settings → Pages**。
-3. Source 選 **Deploy from a branch**，Branch 選 `main`、資料夾選 `/ (root)`，按 Save。
-4. 約 1 分鐘後即可開啟：`https://<你的帳號>.github.io/<repository 名稱>/`
+1. 到 <https://supabase.com/dashboard> 建立專案（Region 建議選 Singapore）。
+2. 左側 **SQL Editor** → 貼上 `supabase-setup.sql` 全部內容 → **Run**。
+3. **Project Settings → API**（或 Data API / API Keys）複製：
+   - Project URL（`https://xxxx.supabase.co`）
+   - anon public key（或 `sb_publishable_...`）
+4. 把兩個值填進 `supabase-config.js`，push 到 GitHub。
+5. **Settings → Pages**：Source 選 `main` / `(root)`。
+6. **Actions** 分頁 → 選「Supabase 每日喚醒」→ **Run workflow** 手動跑一次，確認是綠勾。
 
-## 開啟多裝置雲端同步（Firebase，免費）
+## 每日喚醒說明
 
-1. 到 <https://console.firebase.google.com> 建立專案（不需啟用 Google Analytics）。
-2. 左側 **建構 → Realtime Database → 建立資料庫**，位置可選 `asia-southeast1`（新加坡），安全規則先選「鎖定模式」。
-3. 到 **規則** 分頁，貼上以下內容後按「發布」：
-   ```json
-   {
-     "rules": {
-       "tugofwar": {
-         ".read": true,
-         ".write": true
-       }
-     }
-   }
-   ```
-4. 回到 **專案設定（齒輪）→ 一般 → 你的應用程式**，新增一個「網頁應用程式 `</>`」，複製 `firebaseConfig` 那段設定。
-5. 打開 `firebase-config.js`，把 `window.FIREBASE_CONFIG = null;` 改成貼上的設定（要確認有 `databaseURL` 這一行），存檔後再 push 到 GitHub。
-6. 重新整理網頁，左上角顯示「🟢 雲端同步中」就成功了。
+- Supabase 免費方案約 7 天沒有活動就會暫停專案，需要到主控台手動恢復。
+- `supabase-keepalive.yml` 每天自動寫入 `keepalive` 表一次，保持專案啟用。
+- GitHub 會停用「60 天沒有 commit」的 repo 的排程，因此 workflow 在距上次 commit 滿 50 天時會自動補一個空 commit。
 
-> ⚠️ 安全提醒：上面的規則允許任何知道網址的人寫入。觀眾請一律分享「👀 觀眾唯讀網址」，裁判網址只給工作人員。
-> 每次比賽可以在網址後面加上 `?room=2026校慶` 這類房間名稱，資料就會和其他場次分開。
+## 安全提醒
 
-## 本機測試
-
-直接雙擊 `index.html` 也能用單機模式。若要和 GitHub Pages 環境一樣（例如會讀取 `tournament_data.json`），可在資料夾內執行：
-
-```bash
-python -m http.server 8000
-```
-
-再開啟 <http://localhost:8000>。
+資料表允許任何持有 anon key 的人讀寫（與 Firebase 版規則相同）。觀眾請一律分享 `?view=1` 唯讀網址。
