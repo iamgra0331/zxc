@@ -433,7 +433,7 @@
     }
 
     .bracket-container {
-      min-width: 1080px;
+      min-width: 1200px;
       display: flex;
       flex-direction: column-reverse; /* 底層籤位 -> 第一輪 -> 第二輪... -> 頂層決賽 */
       gap: 36px;
@@ -667,10 +667,23 @@
       box-shadow: 0 6px 16px rgba(245, 158, 11, 0.2);
     }
 
+    /* 決賽盒在群組內改回一般排版，避免與季殿軍賽重疊 */
+    .final-box-group .match-box {
+      position: relative;
+      transform: none;
+    }
+
     .final-box.bronze {
       border: 2px dashed #64748b;
       box-shadow: 0 4px 8px rgba(0,0,0,0.06);
       width: 235px;
+    }
+
+    /* 季殿軍賽放在冠亞軍賽右側，不擋住準決賽連到決賽的線 */
+    .final-box-group .match-box.bronze {
+      position: absolute;
+      top: 0;
+      left: calc(100% + 28px);
     }
 
     .final-box .match-header {
@@ -817,6 +830,12 @@
       .bracket-viewport { border: none; box-shadow: none; padding: 0; }
     }
   </style>
+  <style>
+    /* 觀眾唯讀模式：隱藏所有編輯功能 */
+    body.view-only .team-manager-card,
+    body.view-only .toolbar { display: none !important; }
+    body.view-only #bracket-container button { cursor: default; }
+  </style>
 </head>
 <body>
 
@@ -836,10 +855,10 @@
     <div class="sync-status-group">
       <div class="sync-badge" id="sync-status-badge" onclick="openSyncModal()" title="點擊開啟手機連線 QR Code">
         <span class="sync-dot"></span>
-        <span id="sync-status-text">連線同步中</span>
+        <span id="sync-status-text">載入中…</span>
       </div>
       <button class="btn-primary" style="padding: 5px 10px; font-size: 0.82rem;" onclick="openSyncModal()">
-        📱 手機連線 / QR Code
+        📱 分享 / QR Code
       </button>
     </div>
   </div>
@@ -875,6 +894,8 @@
     <button class="btn-warning" onclick="resetMatchResults()">🔄 重設比分 (保留籤位)</button>
     <button class="btn-outline" onclick="restoreOfficialPreset()">📷 還原官方原圖名單</button>
     <button class="btn-outline" onclick="window.print()">🖨️ 列印賽程表</button>
+    <button class="btn-outline" onclick="exportData()">💾 匯出資料</button>
+    <button class="btn-outline" onclick="importData()">📂 匯入資料</button>
   </div>
 
   <!-- 即時戰況動態條 -->
@@ -924,35 +945,30 @@
     </div>
   </div>
 
-  <!-- 手機連線 / QR Code Modal (支援 4G/5G 免同 Wi-Fi 與 區域網路雙模式) -->
+  <!-- 分享連線 / QR Code Modal -->
   <div class="modal-overlay" id="sync-modal">
     <div class="modal" style="max-width: 500px;">
-      <h2>📱 手機連線 ＆ 多人即時同步</h2>
-      
-      <!-- 連線模式切換 -->
-      <div style="display: flex; justify-content: center; gap: 8px; margin: 12px 0 14px;">
-        <button type="button" class="btn-primary" id="btn-mode-public" style="padding: 6px 12px; font-size: 0.85rem;" onclick="switchSyncMode('public')">
-          🌐 4G/5G 行動網路 (免同 Wi-Fi)
+      <h2>📱 分享賽程 ＆ 多人同步</h2>
+
+      <div style="display: flex; justify-content: center; gap: 8px; margin: 12px 0 14px; flex-wrap: wrap;">
+        <button type="button" class="btn-primary" id="btn-mode-view" style="padding: 6px 12px; font-size: 0.85rem;" onclick="switchSyncMode('view')">
+          👀 觀眾唯讀網址
         </button>
-        <button type="button" class="btn-outline" id="btn-mode-local" style="padding: 6px 12px; font-size: 0.85rem;" onclick="switchSyncMode('local')">
-          🏠 區域網路 (同 Wi-Fi)
+        <button type="button" class="btn-outline" id="btn-mode-admin" style="padding: 6px 12px; font-size: 0.85rem;" onclick="switchSyncMode('admin')">
+          🛠️ 裁判／管理者網址
         </button>
       </div>
 
-      <p id="sync-mode-desc" style="font-size: 0.88rem; color: #16a34a; font-weight: bold;">
-        ⚡ 4G/5G 全網通用：手機無論在哪裡、不需連學校 Wi-Fi，掃描即可即時同步！
-      </p>
-      
+      <p id="sync-mode-desc" style="font-size: 0.88rem; color: #16a34a; font-weight: bold;"></p>
+
       <div class="qr-container">
-        <canvas id="qr-canvas" width="200" height="200"></canvas>
+        <canvas id="qr-canvas" width="220" height="220"></canvas>
       </div>
 
-      <div style="font-size: 0.82rem; color: #475569;">手機請使用瀏覽器開啟此專屬同步網址：</div>
-      <div class="sync-url-box" id="sync-url-display">正在取得安全連線網址...</div>
+      <div style="font-size: 0.82rem; color: #475569;">手機掃描 QR Code 或開啟以下網址：</div>
+      <div class="sync-url-box" id="sync-url-display"></div>
 
-      <div style="font-size: 0.8rem; color: #15803d; font-weight: bold;" id="connected-clients-info">
-        🟢 雲端穿透服務運作中 ｜ 全場設備 0.05 秒同步更新
-      </div>
+      <div style="font-size: 0.8rem; font-weight: bold;" id="connected-clients-info"></div>
 
       <div class="modal-actions">
         <button class="btn-outline" onclick="copySyncUrl()">📋 複製網址</button>
@@ -974,90 +990,40 @@
     </div>
   </div>
 
-  <!-- 輕量純 JS QRCode 產生庫 (完全無外部依賴) -->
+  <!-- 雲端同步設定 (Firebase，可留空＝單機模式) -->
+  <script src="firebase-config.js"></script>
+  <script src="supabase-config.js"></script>
+
+  <!-- QR Code 產生庫 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
   <script>
-    // 迷你 QRCode 產生模組
-    (function(){
-      function generateSimpleQR(canvas, text) {
-        const ctx = canvas.getContext('2d');
-        const size = canvas.width;
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(0, 0, size, size);
-
-        // 使用更直觀的清晰 QR Code 繪製器
-        // 內嵌簡易 QR Matrix 演算法
-        const qr = createQRCodeMatrix(text);
-        const count = qr.length;
-        const cellSize = (size - 20) / count;
-        const margin = 10;
-
-        ctx.fillStyle = '#0f172a';
-        for (let r = 0; r < count; r++) {
-          for (let c = 0; c < count; c++) {
-            if (qr[r][c]) {
-              ctx.fillRect(margin + c * cellSize, margin + r * cellSize, cellSize + 0.5, cellSize + 0.5);
-            }
+    window.drawQR = function (canvas, text) {
+      const ctx = canvas.getContext('2d');
+      const size = canvas.width;
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, size, size);
+      if (typeof qrcode !== 'function') {
+        ctx.fillStyle = '#64748b';
+        ctx.font = '14px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('QR Code 載入失敗', size / 2, size / 2);
+        return;
+      }
+      const qr = qrcode(0, 'M');
+      qr.addData(text, 'Byte');
+      qr.make();
+      const count = qr.getModuleCount();
+      const margin = 12;
+      const cell = (size - margin * 2) / count;
+      ctx.fillStyle = '#0f172a';
+      for (let r = 0; r < count; r++) {
+        for (let c = 0; c < count; c++) {
+          if (qr.isDark(r, c)) {
+            ctx.fillRect(margin + c * cell, margin + r * cell, Math.ceil(cell), Math.ceil(cell));
           }
         }
       }
-
-      // 產生簡易 QR 矩陣
-      function createQRCodeMatrix(text) {
-        const N = 25; // 25x25 矩陣
-        let mat = Array.from({length: N}, () => Array(N).fill(0));
-
-        // 放置定位點 (Position Detection Patterns)
-        function drawFinder(row, col) {
-          for (let r = -1; r <= 7; r++) {
-            for (let c = -1; c <= 7; c++) {
-              const mr = row + r, mc = col + c;
-              if (mr >= 0 && mr < N && mc >= 0 && mc < N) {
-                if ((r >= 0 && r <= 6 && (c === 0 || c === 6)) ||
-                    (c >= 0 && c <= 6 && (r === 0 || r === 6)) ||
-                    (r >= 2 && r <= 4 && c >= 2 && c <= 4)) {
-                  mat[mr][mc] = 1;
-                } else {
-                  mat[mr][mc] = 0;
-                }
-              }
-            }
-          }
-        }
-        drawFinder(0, 0);
-        drawFinder(0, N - 7);
-        drawFinder(N - 7, 0);
-
-        // 放置 Timing Pattern
-        for (let i = 8; i < N - 8; i++) {
-          mat[6][i] = (i % 2 === 0) ? 1 : 0;
-          mat[i][6] = (i % 2 === 0) ? 1 : 0;
-        }
-
-        // 以文字雜湊填充資料區塊
-        let hash = 0;
-        for (let i = 0; i < text.length; i++) {
-          hash = ((hash << 5) - hash) + text.charCodeAt(i);
-          hash |= 0;
-        }
-
-        let bitIdx = 0;
-        for (let r = 0; r < N; r++) {
-          for (let c = 0; c < N; c++) {
-            // 跳過定位點
-            if ((r < 8 && c < 8) || (r < 8 && c >= N - 8) || (r >= N - 8 && c < 8)) continue;
-            if (r === 6 || c === 6) continue;
-
-            const charCode = text.charCodeAt(bitIdx % text.length);
-            const val = ((hash ^ (r * 31 + c * 17) ^ charCode) >>> (bitIdx % 8)) & 1;
-            mat[r][c] = val;
-            bitIdx++;
-          }
-        }
-        return mat;
-      }
-
-      window.drawQR = generateSimpleQR;
-    })();
+    };
   </script>
 
   <!-- 主應用程式邏輯 -->
@@ -1100,20 +1066,29 @@
     let allGradesData = JSON.parse(JSON.stringify(OFFICIAL_PRESETS));
     let bracketConfig = {};
     let isConnectedToServer = false;
-    let serverHost = window.location.host || "192.168.2.7:8080";
 
     // 初始化啟動
     async function initApp() {
-      // 1. 先從 LocalStorage 載入快照
-      const local = localStorage.getItem('dyn_all_grades');
+      if (IS_VIEW_ONLY) document.body.classList.add('view-only');
+
+      // 1. 先從 LocalStorage 載入快照；沒有的話讀取 repo 內的 tournament_data.json 作為初始資料
+      let local = null;
+      try { local = localStorage.getItem('dyn_all_grades'); } catch (e) {}
+      let loaded = false;
       if (local) {
         try {
-          const parsed = JSON.parse(local);
-          Object.assign(allGradesData, parsed);
+          allGradesData = normalizeAll(JSON.parse(local));
+          loaded = true;
         } catch(e){}
       }
+      if (!loaded) {
+        try {
+          const res = await fetch('tournament_data.json', { cache: 'no-store' });
+          if (res.ok) allGradesData = normalizeAll(await res.json());
+        } catch (e) {}
+      }
 
-      // 2. 嘗試連線後端 Python 伺服器
+      // 2. 啟動同步（單機 / Firebase 雲端）
       setupServerConnection();
 
       // 3. 渲染目前年級賽程
@@ -1122,111 +1097,240 @@
       window.addEventListener('resize', () => drawLines());
     }
 
-    // 連線伺服器與 SSE 即時廣播
-    function setupServerConnection() {
-      const isHttp = window.location.protocol.startsWith('http');
-      const sseUrl = isHttp ? '/api/events' : 'http://192.168.2.7:8080/api/events';
-      const apiUrl = isHttp ? '/api/data' : 'http://192.168.2.7:8080/api/data';
+    // ===== 同步層：GitHub Pages 純前端版 =====
+    // 1. 單機模式：資料存在瀏覽器 localStorage，同一台電腦的多個分頁會互相同步。
+    // 2. 雲端模式：在 firebase-config.js 填入 Firebase 設定後，所有裝置即時同步。
+    const URL_PARAMS = new URLSearchParams(window.location.search);
+    const IS_VIEW_ONLY = URL_PARAMS.has('view');
+    const FB_CONF = (window.FIREBASE_CONFIG && window.FIREBASE_CONFIG.databaseURL) ? window.FIREBASE_CONFIG : null;
+    const SYNC_ROOM = String(URL_PARAMS.get('room') || window.SYNC_ROOM || 'default').replace(/[.#$\[\]\/\s]/g, '_');
+    const FIREBASE_SDK = 'https://www.gstatic.com/firebasejs/10.12.2/';
+    const SB_CONF = (!FB_CONF && window.SUPABASE_CONFIG && window.SUPABASE_CONFIG.url && window.SUPABASE_CONFIG.anonKey) ? window.SUPABASE_CONFIG : null;
+    const SUPABASE_SDK = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js';
+    const SB_TABLE = 'tugofwar';
+    const CLOUD_NAME = FB_CONF ? 'Firebase' : (SB_CONF ? 'Supabase' : '');
+    const bc = ('BroadcastChannel' in window) ? new BroadcastChannel('tugofwar_sync_' + SYNC_ROOM) : null;
+    let fbRef = null;
+    let sbClient = null;
+    let syncState = 'local';
+    let syncErrorMsg = '';
+    const pendingGrades = new Set();
 
-      // 先抓取一次資料庫
-      fetch(apiUrl)
-        .then(res => res.json())
-        .then(res => {
-          if (res.data) {
-            allGradesData = res.data;
-            if (res.public_url) publicServerUrl = res.public_url;
-            if (res.server_ip) {
-              localServerUrl = `http://${res.server_ip}:${res.port}`;
-              serverHost = `${res.server_ip}:${res.port}`;
-            }
-            saveLocalBackup();
-            renderCurrentGrade();
-            setOnlineStatus(true);
-          }
-        })
-        .catch(() => {
-          setOnlineStatus(false);
-        });
-
-      // 建立 SSE 長連線
-      try {
-        const es = new EventSource(sseUrl);
-        es.addEventListener('open', () => {
-          setOnlineStatus(true);
-        });
-        es.addEventListener('initial_sync', (e) => {
-          try {
-            const payload = JSON.parse(e.data);
-            if (payload.tournament_data) {
-              allGradesData = payload.tournament_data;
-            } else {
-              allGradesData = payload;
-            }
-            if (payload.public_url) {
-              publicServerUrl = payload.public_url;
-            }
-            saveLocalBackup();
-            renderCurrentGrade();
-          } catch(err){}
-        });
-        es.addEventListener('tournament_update', (e) => {
-          try {
-            const payload = JSON.parse(e.data);
-            if (payload.type === 'server_info' && payload.public_url) {
-              publicServerUrl = payload.public_url;
-            } else if (payload.grade && payload.data) {
-              allGradesData[payload.grade] = payload.data;
-              saveLocalBackup();
-              if (payload.grade === currentGrade) {
-                renderCurrentGrade();
-              }
-            }
-          } catch(err){}
-        });
-        es.addEventListener('error', () => {
-          setOnlineStatus(false);
-        });
-      } catch(e) {
-        setOnlineStatus(false);
-      }
+    function normalizeGrade(g, key) {
+      const fallback = OFFICIAL_PRESETS[key] || { title: key, teams: [], results: {} };
+      g = g || fallback;
+      let teams = g.teams || [];
+      if (!Array.isArray(teams)) teams = Object.values(teams);
+      return {
+        title: g.title || fallback.title,
+        teams: teams.filter(t => t !== null && t !== undefined && t !== ''),
+        results: (g.results && typeof g.results === 'object') ? g.results : {}
+      };
     }
 
-    function setOnlineStatus(online) {
-      isConnectedToServer = online;
+    function normalizeAll(data) {
+      data = data || {};
+      const out = {};
+      new Set([...Object.keys(OFFICIAL_PRESETS), ...Object.keys(data)]).forEach(k => {
+        out[k] = normalizeGrade(data[k], k);
+      });
+      return out;
+    }
+
+    function loadScript(src) {
+      return new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = src;
+        s.onload = resolve;
+        s.onerror = () => reject(new Error('load ' + src));
+        document.head.appendChild(s);
+      });
+    }
+
+    function applyRemote(data) {
+      allGradesData = normalizeAll(data);
+      saveLocalBackup();
+      renderCurrentGrade();
+    }
+
+    function setupServerConnection() {
+      // 同一瀏覽器多分頁同步（例：一個分頁操作、另一個分頁投影）
+      if (bc) {
+        bc.onmessage = (e) => {
+          const msg = e.data || {};
+          if (msg.type === 'grade' && msg.grade && msg.data && !CLOUD_NAME) {
+            allGradesData[msg.grade] = normalizeGrade(msg.data, msg.grade);
+            saveLocalBackup();
+            if (msg.grade === currentGrade) renderCurrentGrade();
+          }
+        };
+      }
+
+      if (SB_CONF) {
+        setupSupabase();
+        return;
+      }
+
+      if (!FB_CONF) {
+        setOnlineStatus('local');
+        return;
+      }
+
+      setOnlineStatus('connecting');
+      loadScript(FIREBASE_SDK + 'firebase-app-compat.js')
+        .then(() => loadScript(FIREBASE_SDK + 'firebase-database-compat.js'))
+        .then(() => {
+          firebase.initializeApp(FB_CONF);
+          const db = firebase.database();
+          fbRef = db.ref('tugofwar/' + SYNC_ROOM);
+          db.ref('.info/connected').on('value', snap => {
+            setOnlineStatus(snap.val() ? 'online' : 'connecting');
+          });
+          fbRef.on('value', snap => {
+            const val = snap.val();
+            if (!val) {
+              // 雲端尚無資料：由管理者端上傳目前資料作為初始值
+              if (!IS_VIEW_ONLY) fbRef.set(JSON.parse(JSON.stringify(allGradesData)));
+              return;
+            }
+            applyRemote(val);
+          }, err => {
+            setOnlineStatus('error', err && err.message);
+          });
+        })
+        .catch(err => setOnlineStatus('error', '無法載入 Firebase：' + err.message));
+    }
+
+    // ----- Supabase：資料表 tugofwar，每個年級一列 (room, grade, data) -----
+    function sbUpsertGrades(grades) {
+      if (!sbClient || !grades.length) return Promise.resolve();
+      const now = new Date().toISOString();
+      const rows = grades.map(g => ({
+        room: SYNC_ROOM,
+        grade: g,
+        data: JSON.parse(JSON.stringify(allGradesData[g])),
+        updated_at: now
+      }));
+      return sbClient.from(SB_TABLE).upsert(rows).then(({ error }) => {
+        if (error) setOnlineStatus('error', error.message);
+      });
+    }
+
+    function setupSupabase() {
+      setOnlineStatus('connecting');
+      loadScript(SUPABASE_SDK)
+        .then(async () => {
+          sbClient = window.supabase.createClient(SB_CONF.url, SB_CONF.anonKey, {
+            auth: { persistSession: false }
+          });
+
+          // 先訂閱即時變更，再讀取現有資料，避免漏掉中間的更新
+          sbClient
+            .channel('tugofwar-' + SYNC_ROOM)
+            .on('postgres_changes',
+              { event: '*', schema: 'public', table: SB_TABLE, filter: 'room=eq.' + SYNC_ROOM },
+              (payload) => {
+                const row = payload.new;
+                if (!row || !row.grade) return;
+                allGradesData[row.grade] = normalizeGrade(row.data, row.grade);
+                saveLocalBackup();
+                if (row.grade === currentGrade) renderCurrentGrade();
+              })
+            .subscribe((status, err) => {
+              if (status === 'SUBSCRIBED') setOnlineStatus('online');
+              else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') setOnlineStatus('error', 'Realtime ' + status + (err ? '：' + err.message : ''));
+              else if (status === 'CLOSED') setOnlineStatus('connecting');
+            });
+
+          const { data, error } = await sbClient.from(SB_TABLE).select('grade,data').eq('room', SYNC_ROOM);
+          if (error) throw error;
+          if (!data.length) {
+            // 雲端尚無資料：由管理者端上傳目前資料作為初始值
+            if (!IS_VIEW_ONLY) await sbUpsertGrades(Object.keys(allGradesData));
+            return;
+          }
+          const merged = { ...allGradesData };
+          data.forEach(r => { merged[r.grade] = r.data; });
+          applyRemote(merged);
+        })
+        .catch(err => setOnlineStatus('error', 'Supabase：' + (err && err.message)));
+    }
+
+    function setOnlineStatus(state, msg) {
+      syncState = state;
+      syncErrorMsg = msg || '';
+      isConnectedToServer = state === 'online';
       const badge = document.getElementById('sync-status-badge');
       const text = document.getElementById('sync-status-text');
-      if (online) {
-        badge.classList.add('online');
-        text.textContent = '🟢 多人同步中';
-      } else {
-        badge.classList.remove('online');
-        text.textContent = '⚪ 本地模式 (未啟動伺服器)';
-      }
+      badge.classList.toggle('online', state === 'online');
+      const roomTag = SYNC_ROOM !== 'default' ? `（${SYNC_ROOM}）` : '';
+      const viewTag = IS_VIEW_ONLY ? '｜唯讀' : '';
+      text.textContent = {
+        online: `🟢 ${CLOUD_NAME} 同步中${roomTag}${viewTag}`,
+        connecting: `🟡 ${CLOUD_NAME} 連線中…${viewTag}`,
+        error: `🔴 ${CLOUD_NAME} 同步失敗${viewTag}`,
+        local: `💾 單機模式${viewTag}`
+      }[state];
+      if (state === 'error') console.warn('Sync error:', msg);
     }
 
     function saveLocalBackup() {
-      localStorage.setItem('dyn_all_grades', JSON.stringify(allGradesData));
+      try {
+        localStorage.setItem('dyn_all_grades', JSON.stringify(allGradesData));
+      } catch (e) {}
     }
 
-    // 發送即時更新到伺服器
-    function syncUpdateToServer(action, payload = {}) {
+    // 推送變更：同一輪操作中的多次呼叫會合併成一次寫入
+    function syncUpdateToServer() {
+      if (IS_VIEW_ONLY) return;
+      pendingGrades.add(currentGrade);
       saveLocalBackup();
-      if (!isConnectedToServer) return;
+      queueMicrotask(flushSync);
+    }
 
-      const body = {
-        grade: currentGrade,
-        action: action,
-        ...payload
+    function flushSync() {
+      if (!pendingGrades.size) return;
+      const grades = [...pendingGrades];
+      pendingGrades.clear();
+      if (sbClient) sbUpsertGrades(grades);
+      grades.forEach(g => {
+        const data = JSON.parse(JSON.stringify(allGradesData[g]));
+        if (bc) bc.postMessage({ type: 'grade', grade: g, data });
+        if (fbRef) {
+          fbRef.child(g).set(data).catch(err => setOnlineStatus('error', err.message));
+        }
+      });
+    }
+
+    // 匯出 / 匯入 JSON 備份
+    function exportData() {
+      const blob = new Blob([JSON.stringify(allGradesData, null, 2)], { type: 'application/json' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'tournament_data.json';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    function importData() {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.json,application/json';
+      input.onchange = () => {
+        const file = input.files[0];
+        if (!file) return;
+        file.text().then(txt => {
+          const data = JSON.parse(txt);
+          if (!confirm('確定以匯入的檔案覆蓋所有年級的賽程資料嗎？')) return;
+          allGradesData = normalizeAll(data);
+          saveLocalBackup();
+          Object.keys(allGradesData).forEach(g => pendingGrades.add(g));
+          flushSync();
+          renderCurrentGrade();
+          updateStatusContent('📂 已匯入賽程資料！');
+        }).catch(() => alert('檔案格式錯誤，無法匯入。'));
       };
-
-      const isHttp = window.location.protocol.startsWith('http');
-      const targetUrl = isHttp ? '/api/update' : 'http://192.168.2.7:8080/api/update';
-
-      fetch(targetUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body)
-      }).catch(err => console.log('Sync push error:', err));
+      input.click();
     }
 
     // 切換年級分頁
@@ -1519,6 +1623,9 @@
       const svg = document.getElementById('bracket-svg');
       container.innerHTML = '';
       container.appendChild(svg);
+      // 籤數越多，畫布越寬，避免比賽盒互相重疊（超出可視範圍時可左右捲動）
+      // （相鄰兩場比賽中心相距 2 籤，比賽盒寬 150px，因此每籤至少需 80px）
+      container.style.minWidth = `${Math.max(1200, bracketConfig.slots.length * 80)}px`;
 
       // 籤位列
       const seedsRow = document.createElement('div');
@@ -1710,7 +1817,7 @@
       const def = bracketConfig.matches[matchId];
       const results = allGradesData[currentGrade].results;
 
-      if (!chosenTeam) return;
+      if (IS_VIEW_ONLY || !chosenTeam) return;
 
       if (results[matchId] === side) {
         delete results[matchId];
@@ -2028,50 +2135,52 @@
       }
     }
 
-    // 手機同步連線 QR Code Modal 控制 (4G/5G 與同 Wi-Fi 雙模式)
-    let currentSyncMode = 'public';
-    let publicServerUrl = null;
-    let localServerUrl = `http://192.168.2.7:8080`;
+    // 分享 QR Code Modal
+    let currentSyncMode = 'view';
+
+    function buildShareUrl(mode) {
+      const url = new URL(window.location.href);
+      url.hash = '';
+      url.search = '';
+      if (SYNC_ROOM !== 'default') url.searchParams.set('room', SYNC_ROOM);
+      if (mode === 'view') url.searchParams.set('view', '1');
+      return url.toString();
+    }
 
     function switchSyncMode(mode) {
       currentSyncMode = mode;
-      const btnPub = document.getElementById('btn-mode-public');
-      const btnLoc = document.getElementById('btn-mode-local');
+      document.getElementById('btn-mode-view').className = mode === 'view' ? 'btn-primary' : 'btn-outline';
+      document.getElementById('btn-mode-admin').className = mode === 'admin' ? 'btn-primary' : 'btn-outline';
       const desc = document.getElementById('sync-mode-desc');
-      const display = document.getElementById('sync-url-display');
-      const canvas = document.getElementById('qr-canvas');
-
-      let targetUrl = '';
-      if (mode === 'public') {
-        btnPub.className = 'btn-primary';
-        btnLoc.className = 'btn-outline';
-        targetUrl = publicServerUrl || window.location.href;
-        desc.textContent = '⚡ 4G/5G 全網通用：手機無論在哪裡、不需連學校 Wi-Fi，掃描即可即時同步！';
+      if (mode === 'view') {
+        desc.textContent = '👀 觀眾版：只能看賽程與戰況，不會誤觸修改比分。';
         desc.style.color = '#16a34a';
       } else {
-        btnPub.className = 'btn-outline';
-        btnLoc.className = 'btn-primary';
-        targetUrl = localServerUrl;
-        desc.textContent = '🏠 區域網路模式：適用於同一個 Wi-Fi 內高速連線。';
-        desc.style.color = '#1e40af';
+        desc.textContent = '🛠️ 裁判版：可點選勝隊、修改名單，請只分享給工作人員。';
+        desc.style.color = '#b45309';
       }
+      const targetUrl = buildShareUrl(mode);
+      document.getElementById('sync-url-display').textContent = targetUrl;
+      window.drawQR(document.getElementById('qr-canvas'), targetUrl);
 
-      display.textContent = targetUrl;
-      window.drawQR(canvas, targetUrl);
+      const info = document.getElementById('connected-clients-info');
+      if (syncState === 'online') {
+        info.textContent = '🟢 ' + CLOUD_NAME + ' 雲端同步運作中：所有開啟此網址的裝置會即時更新。';
+        info.style.color = '#15803d';
+      } else if (syncState === 'local') {
+        info.textContent = '⚠️ 尚未設定雲端同步（Firebase 或 Supabase），目前為單機模式：其他裝置只會看到自己的資料，不會同步。設定方式請見 README。';
+        info.style.color = '#b45309';
+      } else if (syncState === 'error') {
+        info.textContent = '🔴 雲端同步失敗：' + syncErrorMsg;
+        info.style.color = '#b91c1c';
+      } else {
+        info.textContent = '🟡 正在連線雲端…';
+        info.style.color = '#b45309';
+      }
     }
 
     function openSyncModal() {
-      // 每次開啟優先查詢最新 info
-      fetch('/api/info')
-        .then(r => r.json())
-        .then(info => {
-          if (info.public_url) publicServerUrl = info.public_url;
-          if (info.local_url) localServerUrl = info.local_url;
-          switchSyncMode(publicServerUrl ? 'public' : 'local');
-        })
-        .catch(() => {
-          switchSyncMode(publicServerUrl ? 'public' : 'local');
-        });
+      switchSyncMode(currentSyncMode);
       document.getElementById('sync-modal').style.display = 'flex';
     }
 
@@ -2082,7 +2191,7 @@
     function copySyncUrl() {
       const url = document.getElementById('sync-url-display').textContent;
       navigator.clipboard.writeText(url).then(() => {
-        alert("已成功複製連線網址！");
+        alert("已成功複製網址！");
       }).catch(() => {
         prompt("請手動複製以下網址：", url);
       });
