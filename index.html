@@ -980,6 +980,81 @@
     </div>
   </div>
 
+  
+  <!-- 依照圖片 / PDF 產製賽程表精靈 Modal -->
+  <div class="modal-overlay" id="schedule-wizard-modal" style="display:none; z-index: 10000;">
+    <div class="modal" style="max-width: 780px; width: 92%;">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid #e2e8f0; padding-bottom: 8px;">
+        <h2 style="margin: 0; font-size: 1.25rem; color: #1e293b;">📸 依照圖片 / PDF 產製賽程表</h2>
+        <button style="background: none; border: none; font-size: 1.2rem; cursor: pointer; color: #64748b;" onclick="closeScheduleWizard()">✕</button>
+      </div>
+
+      <p style="font-size: 0.86rem; color: #64748b; margin-top: 0; margin-bottom: 14px;">
+        上傳學校拔河賽或球賽之賽程照片、抽籤表截圖或 PDF，系統將自動辨識籤位與隊伍，產製出完全一模一樣的互動賽程表！
+      </p>
+
+      <!-- 拖曳或選取區域 -->
+      <div id="wizard-drop-zone" style="border: 2px dashed #93c5fd; background: #eff6ff; border-radius: 8px; padding: 16px; text-align: center; cursor: pointer; margin-bottom: 14px; transition: all 0.2s ease;" onclick="triggerWizardFileInput()">
+        <input type="file" id="wizard-file-input" accept="image/*,.pdf,.png,.jpg,.jpeg,.webp" style="display:none;" onchange="handleWizardFileSelect(this.files[0])" />
+        <div style="font-size: 1.8rem; margin-bottom: 4px;">📑 點擊選取 或 將賽程圖片 / PDF 拖曳至此</div>
+        <div style="font-size: 0.82rem; color: #3b82f6;">亦支援直接在螢幕上按 <kbd style="background:#fff; border:1px solid #cbd5e1; padding:1px 5px; border-radius:3px; font-family:monospace;">Ctrl + V</kbd> 貼上截圖</div>
+      </div>
+
+      <!-- 雙欄對照與產製設定區 -->
+      <div id="wizard-content-section" style="display:none;">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 14px;">
+          <!-- 左欄：圖片對照預覽 -->
+          <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px; display: flex; flex-direction: column; align-items: center;">
+            <div style="font-size: 0.82rem; font-weight: bold; color: #475569; margin-bottom: 6px; width: 100%; text-align: left;">
+              🖼️ 原始賽程圖（可對照右側籤位）
+            </div>
+            <div style="width: 100%; max-height: 280px; overflow: auto; display: flex; justify-content: center; align-items: center; background: #00000008; border-radius: 4px; padding: 4px;">
+              <img id="wizard-preview-img" style="max-width: 100%; max-height: 260px; object-fit: contain; border-radius: 4px;" alt="賽程圖預覽" />
+            </div>
+            <div style="font-size: 0.75rem; color: #94a3b8; margin-top: 6px;" id="wizard-match-hint"></div>
+          </div>
+
+          <!-- 右欄：籤位隊伍與標題設定 -->
+          <div style="display: flex; flex-direction: column; gap: 10px;">
+            <div>
+              <label style="font-size: 0.82rem; font-weight: bold; color: #334155;">賽程表標題：</label>
+              <input type="text" id="wizard-title-input" placeholder="例如：高一拔河賽 賽程表" style="width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem; box-sizing: border-box; margin-top: 3px;" />
+            </div>
+
+            <div>
+              <label style="font-size: 0.82rem; font-weight: bold; color: #334155;">產製至分頁組別：</label>
+              <select id="wizard-grade-select" style="width: 100%; padding: 6px 10px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 0.9rem; box-sizing: border-box; margin-top: 3px;">
+                <option value="g1">高一拔河賽 (g1)</option>
+                <option value="g2">高二拔河賽 (g2)</option>
+                <option value="g3">高三拔河賽 (g3)</option>
+                <option value="custom">自訂錦標賽 (custom)</option>
+              </select>
+            </div>
+
+            <div style="flex: 1; display: flex; flex-direction: column;">
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <label style="font-size: 0.82rem; font-weight: bold; color: #334155;">籤位排列隊伍名單（每行一隊，依 1 到 N 排序）：</label>
+                <span id="wizard-team-count-badge" style="font-size: 0.75rem; background: #dbeafe; color: #1e40af; padding: 2px 6px; border-radius: 4px; font-weight: bold;">0 隊</span>
+              </div>
+              <textarea id="wizard-teams-textarea" style="width: 100%; height: 130px; padding: 8px; border: 1px solid #cbd5e1; border-radius: 6px; font-family: monospace; font-size: 0.9rem; resize: vertical; box-sizing: border-box; margin-top: 3px;" oninput="updateWizardTeamCount()"></textarea>
+            </div>
+          </div>
+        </div>
+
+        <div id="wizard-topology-hint" style="background: #f0fdf4; border: 1px solid #bbf7d0; color: #166534; padding: 8px 12px; border-radius: 6px; font-size: 0.82rem; margin-bottom: 12px;">
+          💡 點擊下方產製按鈕後，系統將依據上方籤位名單，建構出對應之樹狀單淘汰賽程！
+        </div>
+      </div>
+
+      <div class="modal-actions" style="margin-top: 8px;">
+        <button class="btn-outline" onclick="closeScheduleWizard()">取消</button>
+        <button class="btn-primary" id="wizard-submit-btn" style="background: linear-gradient(135deg, #16a34a, #059669); border: none; font-weight: bold; display: none;" onclick="executeGenerateFromWizard()">
+          🚀 立即產製賽程表
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- 批次修改 Modal -->
   <div class="modal-overlay" id="batch-modal">
     <div class="modal">
@@ -1669,27 +1744,7 @@
       updateStatusContent(`🎉 成功從檔案匯入 ${lines.length} 支隊伍至【${gradeTitle}】！`);
     }
 
-      const gradeTitle = allGradesData[targetGrade] ? allGradesData[targetGrade].title : targetGrade;
-      if (!confirm(`確定要將 ${lines.length} 支隊伍套用至【${gradeTitle}】嗎？\n（將會為該組重新建立籤位並重設比分）`)) {
-        return;
-      }
 
-      if (!allGradesData[targetGrade]) {
-        allGradesData[targetGrade] = { title: targetGrade, teams: [], results: {} };
-      }
-
-      allGradesData[targetGrade].teams = lines;
-      allGradesData[targetGrade].results = {};
-
-      saveLocalBackup();
-      pendingGrades.add(targetGrade);
-      flushSync();
-
-      // 切換至該年級並重新繪製
-      switchGrade(targetGrade);
-      closeOcrResultModal();
-      updateStatusContent(`🎉 成功從檔案匯入 ${lines.length} 支隊伍至【${gradeTitle}】！`);
-    }
 
 
     // 切換年級分頁
