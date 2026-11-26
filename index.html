@@ -890,6 +890,9 @@
 
   <!-- 工具列 -->
   <div class="toolbar">
+    <button class="btn-primary" style="background: linear-gradient(135deg, #1d4ed8, #7c3aed); border: none; font-weight: bold; box-shadow: 0 2px 8px rgba(124, 58, 237, 0.35);" onclick="openScheduleImageImporter()">
+      📸 匯入賽程圖 / PDF 自動產表
+    </button>
     <button class="btn-primary" onclick="shuffleTeams()">🎲 重新隨機抽籤</button>
     <button class="btn-warning" onclick="resetMatchResults()">🔄 重設比分 (保留籤位)</button>
     <button class="btn-outline" onclick="restoreOfficialPreset()">📷 還原官方原圖名單</button>
@@ -995,6 +998,9 @@
   <script src="supabase-config.js"></script>
 
   <!-- QR Code 產生庫 -->
+    <!-- PDF.js 與 Tesseract.js (純前端 PDF 文字提取與圖片 OCR 辨識) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
   <script>
     window.drawQR = function (canvas, text) {
@@ -1312,26 +1318,379 @@
       setTimeout(() => URL.revokeObjectURL(a.href), 1000);
     }
 
+        // 匯入資料功能（支援 JSON 完整賽程、PDF 賽程表、圖片名單）
     function importData() {
       const input = document.createElement('input');
       input.type = 'file';
-      input.accept = '.json,application/json';
-      input.onchange = () => {
+      input.accept = '.json,application/json,.pdf,application/pdf,image/*,.png,.jpg,.jpeg,.webp,.bmp';
+      
+      input.onchange = async () => {
         const file = input.files[0];
         if (!file) return;
-        file.text().then(txt => {
-          const data = JSON.parse(txt);
-          if (!confirm('確定以匯入的檔案覆蓋所有年級的賽程資料嗎？')) return;
-          allGradesData = normalizeAll(data);
-          saveLocalBackup();
-          Object.keys(allGradesData).forEach(g => pendingGrades.add(g));
-          flushSync();
-          renderCurrentGrade();
-          updateStatusContent('📂 已匯入賽程資料！');
-        }).catch(() => alert('檔案格式錯誤，無法匯入。'));
+
+        const fileName = file.name.toLowerCase();
+
+        // 1. 若為 JSON 檔案：依原有方式匯入完整賽程
+        if (fileName.endsWith('.json') || file.type === 'application/json') {
+          try {
+            const txt = await file.text();
+            const data = JSON.parse(txt);
+            if (!confirm('確定以匯入的 JSON 檔案覆蓋所有年級的賽程資料嗎？')) return;
+            allGradesData = normalizeAll(data);
+            saveLocalBackup();
+            Object.keys(allGradesData).forEach(g => pendingGrades.add(g));
+            flushSync();
+            renderCurrentGrade();
+            updateStatusContent('📂 已成功匯入 JSON 賽程資料！');
+          } catch (e) {
+            alert('JSON 檔案格式錯誤，無法匯入。');
+          }
+          return;
+        }
+
+        // 2. 若為 PDF 檔案
+        if (fileName.endsWith('.pdf') || file.type === 'application/pdf') {
+          openScheduleImageImporter();
+          processFileForScheduleWizard(file);
+          return;
+        }
+
+        // 3. 若為圖片檔案
+        if (file.type.startsWith('image/') || /\.(png|jpe?g|webp|bmp)$/i.test(fileName)) {
+          openScheduleImageImporter();
+          processFileForScheduleWizard(file);
+          return;
+        }
+
+        alert('不支援此檔案格式。請上傳 .json、.pdf 或圖片檔 (.jpg, .png)。');
       };
       input.click();
     }
+
+    // 顯示辨識進度
+    function showOcrProgress(statusText, percent) {
+      const modal = document.getElementById('ocr-progress-modal');
+      const status = document.getElementById('ocr-progress-status');
+      const bar = document.getElementById('ocr-progress-bar');
+      if (modal) modal.style.display = 'flex';
+      if (status) status.textContent = statusText;
+      if (bar) bar.style.width = Math.min(100, Math.max(5, percent)) + '%';
+    }
+
+    // 關閉辨識進度
+    function hideOcrProgress() {
+      const modal = document.getElementById('ocr-progress-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    // 關閉辨識確認對話框
+    function closeOcrResultModal() {
+      const modal = document.getElementById('ocr-result-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+        // 預處理圖片尺寸與對比度，防止大圖記憶體崩潰並提高 OCR 精準度
+    async function preprocessImage(imageSource) {
+      return new Promise((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+          // 限制最大維度為 1500px，既維持文字清晰度又避免 WASM OOM
+          const maxDim = 1500;
+          let w = img.width;
+          let h = img.height;
+          if (w > maxDim || h > maxDim) {
+            if (w > h) {
+              h = Math.round(h * (maxDim / w));
+              w = maxDim;
+            } else {
+              w = Math.round(w * (maxDim / h));
+              h = maxDim;
+            }
+          }
+          const canvas = document.createElement('canvas');
+          canvas.width = w;
+          canvas.height = h;
+          const ctx = canvas.getContext('2d');
+          ctx.fillStyle = '#ffffff';
+          ctx.fillRect(0, 0, w, h);
+          ctx.drawImage(img, 0, 0, w, h);
+
+          try {
+            const imgData = ctx.getImageData(0, 0, w, h);
+            const data = imgData.data;
+            for (let i = 0; i < data.length; i += 4) {
+              const gray = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+              const val = gray > 140 ? Math.min(255, gray * 1.1) : Math.max(0, gray * 0.85);
+              data[i] = val;
+              data[i + 1] = val;
+              data[i + 2] = val;
+            }
+            ctx.putImageData(imgData, 0, 0);
+          } catch (e) {
+            console.warn('Canvas pixel manipulation skipped:', e);
+          }
+          resolve(canvas);
+        };
+        img.onerror = () => reject(new Error('圖片載入失敗，可能檔案格式不支援或已損毀。'));
+
+        if (imageSource instanceof HTMLCanvasElement) {
+          resolve(imageSource);
+        } else if (typeof imageSource === 'string') {
+          img.src = imageSource;
+        } else {
+          const reader = new FileReader();
+          reader.onload = e => { img.src = e.target.result; };
+          reader.onerror = () => reject(new Error('讀取圖片檔案失敗'));
+          reader.readAsDataURL(imageSource);
+        }
+      });
+    }
+
+    // 處理 PDF 檔案辨識與名單匯入
+    async function handlePdfImport(file) {
+      if (!window.pdfjsLib) {
+        alert('PDF 解析元件載入中，請稍候重試或檢查網路連線。');
+        return;
+      }
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+      showOcrProgress('正在解析 PDF 文件...', 10);
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        let fullText = '';
+        let previewDataUrl = null;
+
+        for (let i = 1; i <= pdf.numPages; i++) {
+          showOcrProgress(`正在提取 PDF 文字 (第 ${i}/${pdf.numPages} 頁)...`, 15 + Math.round((i / pdf.numPages) * 35));
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+          const pageText = textContent.items.map(item => item.str).join('\n');
+          fullText += pageText + '\n';
+        }
+
+        // 若文字層太少，代表是掃描型圖片 PDF，調用 OCR 辨識第 1 頁
+        if (fullText.trim().length < 15 && pdf.numPages > 0) {
+          showOcrProgress('PDF 為純掃描圖片，啟動 OCR 光學文字辨識...', 55);
+          const page = await pdf.getPage(1);
+          const viewport = page.getViewport({ scale: 2.0 });
+          const canvas = document.createElement('canvas');
+          canvas.width = viewport.width;
+          canvas.height = viewport.height;
+          const ctx = canvas.getContext('2d');
+          await page.render({ canvasContext: ctx, viewport }).promise;
+          previewDataUrl = canvas.toDataURL('image/jpeg', 0.85);
+          fullText = await runOcrOnImageSource(canvas);
+        }
+
+        const teams = extractTeamsFromText(fullText);
+        hideOcrProgress();
+        showOcrResultDialog(teams, fullText, previewDataUrl);
+      } catch (err) {
+        hideOcrProgress();
+        console.error(err);
+        alert('PDF 解析失敗：' + (err.message || err));
+      }
+    }
+
+    // 處理圖片檔案 OCR 辨識與名單匯入
+    async function handleImageImport(file) {
+      if (!window.Tesseract) {
+        alert('OCR 辨識元件尚未完成載入，請確認網路連線是否通暢。');
+        return;
+      }
+      
+      let previewUrl = null;
+      try {
+        previewUrl = URL.createObjectURL(file);
+      } catch (e) {}
+
+      showOcrProgress('正在啟動 OCR 文字辨識引擎...', 10);
+      try {
+        const text = await runOcrOnImageSource(file);
+        const teams = extractTeamsFromText(text);
+        hideOcrProgress();
+        showOcrResultDialog(teams, text, previewUrl);
+      } catch (err) {
+        hideOcrProgress();
+        console.error('OCR 辨識錯誤記錄:', err);
+
+        let errMsg = err.message || String(err);
+        let hint = '';
+        if (window.location.protocol === 'file:') {
+          hint = '\n\n💡【排查提示】您目前是以本機 file:// 協議開啟，瀏覽器預設安全性政策可能限制了 WebAssembly/Worker。\n建議：\n1. 雙擊執行「啟動多人同步伺服器.bat」，以 http://localhost:8080 開啟。\n2. 或開啟已發布至 GitHub Pages 之線上網址。\n3. 您亦可直接在彈出的名單視窗中手動輸入隊伍！';
+        }
+
+        showOcrResultDialog([], '', previewUrl);
+        alert('圖片文字自動辨識未能完成：' + errMsg + hint);
+      }
+    }
+
+    // 調用 Tesseract OCR 執行文字辨識（採用輕量高速 Fast 模型 1.6MB）
+    async function runOcrOnImageSource(imageSource) {
+      showOcrProgress('正在將圖片縮放與強化文字對比...', 15);
+      const processedCanvas = await preprocessImage(imageSource);
+
+      showOcrProgress('正在載入輕量化中文/英數辨識模型 (約 1.6MB)...', 25);
+
+      let worker = null;
+      try {
+        // 使用 Tesseract.createWorker 搭配 fast 語言包 CDN（高速載入）
+        worker = await Tesseract.createWorker('chi_tra+eng', 1, {
+          workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@v5.1.1/dist/worker.min.js',
+          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@v5.1.0/tesseract-core.wasm.js',
+          langPath: 'https://cdn.jsdelivr.net/gh/naptha/tessdata@gh-pages/4.0.0_fast',
+          logger: m => {
+            if (m.status === 'recognizing text') {
+              const pct = 35 + Math.round((m.progress || 0) * 60);
+              showOcrProgress(`正在掃描並識別名單文字 (${pct}%)...`, pct);
+            } else if (m.status === 'loading language traineddata') {
+              const pct = 20 + Math.round((m.progress || 0) * 15);
+              showOcrProgress('正在快取輕量語言模型...', pct);
+            }
+          }
+        });
+
+        const ret = await worker.recognize(processedCanvas);
+        await worker.terminate();
+        return ret.data.text || '';
+      } catch (err) {
+        if (worker) {
+          try { await worker.terminate(); } catch (e) {}
+        }
+        console.warn('繁中模型載入失敗，嘗試 Fallback 純英數模式:', err);
+
+        // Fallback: 純英數模式 (班級如 101, 102 等純數字)
+        showOcrProgress('嘗試切換備用英數辨識模式...', 50);
+        const fallbackWorker = await Tesseract.createWorker('eng', 1, {
+          workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@v5.1.1/dist/worker.min.js',
+          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@v5.1.0/tesseract-core.wasm.js',
+          langPath: 'https://cdn.jsdelivr.net/gh/naptha/tessdata@gh-pages/4.0.0_fast'
+        });
+        const ret2 = await fallbackWorker.recognize(processedCanvas);
+        await fallbackWorker.terminate();
+        return ret2.data.text || '';
+      }
+    }
+
+    // 從文字中智能提取隊伍名單演算法
+    function extractTeamsFromText(rawText) {
+      const noiseRegex = /賽程|拔河|勝|負|裁判|時間|日期|第.*場|第.*輪|冠亞軍|季殿軍|大會|規則|簽章|備註|組別|籤位|地點|體育|主辦|成績|得分|記分|名次|頒獎/i;
+      const lines = rawText.split(/[\r\n,，;；、\t]+/);
+      const teams = [];
+      const seen = new Set();
+
+      for (let line of lines) {
+        let cleaned = line.trim()
+          .replace(/^[\dIVXivx０-９]+[\.\、\-\:\s]+/, '')
+          .replace(/^[\(（\[【\*#\s]+/, '')
+          .replace(/[\)）\]】\s]+$/, '')
+          .trim();
+
+        if (!cleaned) continue;
+
+        if (cleaned.length >= 2 && cleaned.length <= 16) {
+          if (noiseRegex.test(cleaned)) continue;
+          if (/^\d{1,2}$|^202\d$/.test(cleaned)) continue;
+
+          if (!seen.has(cleaned)) {
+            seen.add(cleaned);
+            teams.push(cleaned);
+          }
+        }
+      }
+      return teams;
+    }
+
+    // 彈出隊伍名單預覽確認對話框
+    function showOcrResultDialog(teams, rawText, previewDataUrl) {
+      const modal = document.getElementById('ocr-result-modal');
+      const textarea = document.getElementById('ocr-teams-input');
+      const gradeSelect = document.getElementById('ocr-target-grade');
+      const countLabel = document.getElementById('ocr-teams-count');
+      const previewContainer = document.getElementById('ocr-preview-container');
+      const previewImg = document.getElementById('ocr-preview-img');
+
+      if (gradeSelect) {
+        gradeSelect.value = currentGrade;
+      }
+
+      if (previewContainer && previewImg) {
+        if (previewDataUrl) {
+          previewImg.src = previewDataUrl;
+          previewContainer.style.display = 'block';
+        } else {
+          previewContainer.style.display = 'none';
+        }
+      }
+
+      if (teams && teams.length > 0) {
+        textarea.value = teams.join('\n');
+        countLabel.textContent = `已智能識別出 ${teams.length} 支隊伍！您可以直接在上方手動編輯或增刪。`;
+      } else {
+        textarea.value = (rawText || '').trim();
+        countLabel.textContent = '您可以直接在上方手動輸入或貼上參賽隊伍名單（每行一隊）。';
+      }
+
+      modal.style.display = 'flex';
+    }
+
+    // 使用者確認套用 OCR / PDF 隊伍名單
+    function confirmApplyOcrTeams() {
+      const textarea = document.getElementById('ocr-teams-input');
+      const gradeSelect = document.getElementById('ocr-target-grade');
+      const targetGrade = gradeSelect.value;
+
+      const lines = textarea.value.split(/[\r\n,，]+/).map(s => s.trim()).filter(Boolean);
+      if (lines.length < 2) {
+        alert('參賽隊伍最少需要 2 隊！');
+        return;
+      }
+
+      const gradeTitle = allGradesData[targetGrade] ? allGradesData[targetGrade].title : targetGrade;
+      if (!confirm(`確定要將 ${lines.length} 支隊伍套用至【${gradeTitle}】嗎？\n（將會為該組重新建立籤位並重設比分）`)) {
+        return;
+      }
+
+      if (!allGradesData[targetGrade]) {
+        allGradesData[targetGrade] = { title: gradeTitle, teams: [], results: {} };
+      }
+
+      allGradesData[targetGrade].teams = lines;
+      allGradesData[targetGrade].results = {};
+
+      saveLocalBackup();
+      pendingGrades.add(targetGrade);
+      flushSync();
+
+      switchGrade(targetGrade);
+      closeOcrResultModal();
+      updateStatusContent(`🎉 成功從檔案匯入 ${lines.length} 支隊伍至【${gradeTitle}】！`);
+    }
+
+      const gradeTitle = allGradesData[targetGrade] ? allGradesData[targetGrade].title : targetGrade;
+      if (!confirm(`確定要將 ${lines.length} 支隊伍套用至【${gradeTitle}】嗎？\n（將會為該組重新建立籤位並重設比分）`)) {
+        return;
+      }
+
+      if (!allGradesData[targetGrade]) {
+        allGradesData[targetGrade] = { title: targetGrade, teams: [], results: {} };
+      }
+
+      allGradesData[targetGrade].teams = lines;
+      allGradesData[targetGrade].results = {};
+
+      saveLocalBackup();
+      pendingGrades.add(targetGrade);
+      flushSync();
+
+      // 切換至該年級並重新繪製
+      switchGrade(targetGrade);
+      closeOcrResultModal();
+      updateStatusContent(`🎉 成功從檔案匯入 ${lines.length} 支隊伍至【${gradeTitle}】！`);
+    }
+
 
     // 切換年級分頁
     function switchGrade(gradeKey) {
@@ -2266,6 +2625,252 @@
     }
 
     window.addEventListener('DOMContentLoaded', initApp);
+  
+    // ==========================================
+    // 📸 依照賽程圖 / PDF 產製賽程表 精靈模組
+    // ==========================================
+    let currentWizardPreviewUrl = null;
+
+    function openScheduleImageImporter() {
+      const modal = document.getElementById('schedule-wizard-modal');
+      const contentSection = document.getElementById('wizard-content-section');
+      const submitBtn = document.getElementById('wizard-submit-btn');
+      const gradeSelect = document.getElementById('wizard-grade-select');
+
+      if (gradeSelect) gradeSelect.value = currentGrade;
+      if (contentSection) contentSection.style.display = 'none';
+      if (submitBtn) submitBtn.style.display = 'none';
+
+      modal.style.display = 'flex';
+    }
+
+    function closeScheduleWizard() {
+      const modal = document.getElementById('schedule-wizard-modal');
+      if (modal) modal.style.display = 'none';
+    }
+
+    function triggerWizardFileInput() {
+      document.getElementById('wizard-file-input').click();
+    }
+
+    function handleWizardFileSelect(file) {
+      if (!file) return;
+      processFileForScheduleWizard(file);
+    }
+
+    // 全局拖曳與貼上截圖監聽
+    window.addEventListener('paste', (e) => {
+      const items = (e.clipboardData || e.originalEvent.clipboardData).items;
+      for (let item of items) {
+        if (item.type.indexOf('image') !== -1) {
+          const file = item.getAsFile();
+          openScheduleImageImporter();
+          processFileForScheduleWizard(file);
+          break;
+        }
+      }
+    });
+
+    window.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      const dropZone = document.getElementById('wizard-drop-zone');
+      if (dropZone) dropZone.style.borderColor = '#2563eb';
+    });
+
+    window.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const dropZone = document.getElementById('wizard-drop-zone');
+      if (dropZone) dropZone.style.borderColor = '#93c5fd';
+
+      if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        const file = e.dataTransfer.files[0];
+        if (file.type.indexOf('image') !== -1 || file.name.endsWith('.pdf')) {
+          openScheduleImageImporter();
+          processFileForScheduleWizard(file);
+        }
+      }
+    });
+
+    // 核心處理函式：讀取圖片/PDF 並抽取籤位與標題
+    async function processFileForScheduleWizard(file) {
+      const fileName = file.name.toLowerCase();
+      showOcrProgress('正在分析賽程檔案中...', 10);
+
+      let rawText = '';
+      let previewUrl = null;
+
+      try {
+        if (fileName.endsWith('.pdf') || file.type === 'application/pdf') {
+          // PDF 處理
+          if (!window.pdfjsLib) throw new Error('PDF 解析庫載入中，請稍候重試');
+          pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+          
+          const arrayBuffer = await file.arrayBuffer();
+          const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+          for (let i = 1; i <= pdf.numPages; i++) {
+            showOcrProgress(`正在提取 PDF 文字 (第 ${i}/${pdf.numPages} 頁)...`, 15 + Math.round((i / pdf.numPages) * 35));
+            const page = await pdf.getPage(i);
+            const textContent = await page.getTextContent();
+            rawText += textContent.items.map(item => item.str).join('\n') + '\n';
+          }
+
+          if (rawText.trim().length < 15 && pdf.numPages > 0) {
+            showOcrProgress('PDF 為純掃描圖，啟動 OCR 光學文字辨識...', 55);
+            const page = await pdf.getPage(1);
+            const viewport = page.getViewport({ scale: 2.0 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const ctx = canvas.getContext('2d');
+            await page.render({ canvasContext: ctx, viewport }).promise;
+            previewUrl = canvas.toDataURL('image/jpeg', 0.85);
+            rawText = await runOcrOnImageSource(canvas);
+          }
+        } else {
+          // 圖片處理
+          try { previewUrl = URL.createObjectURL(file); } catch (e) {}
+          rawText = await runOcrOnImageSource(file);
+        }
+
+        hideOcrProgress();
+        setupWizardWithExtractedData(rawText, previewUrl, fileName);
+      } catch (err) {
+        hideOcrProgress();
+        console.error('Wizard 分析失敗:', err);
+        // 容錯開啟
+        setupWizardWithExtractedData('', previewUrl, fileName);
+        alert('自動文字辨識未能完全解析，已為您開啟產製面板，您可以對照左側圖片手動輸入籤位隊伍！');
+      }
+    }
+
+    // 依據識別結果設置 Wizard 介面
+    function setupWizardWithExtractedData(rawText, previewUrl, fileName) {
+      const contentSection = document.getElementById('wizard-content-section');
+      const submitBtn = document.getElementById('wizard-submit-btn');
+      const previewImg = document.getElementById('wizard-preview-img');
+      const titleInput = document.getElementById('wizard-title-input');
+      const gradeSelect = document.getElementById('wizard-grade-select');
+      const textarea = document.getElementById('wizard-teams-textarea');
+      const matchHint = document.getElementById('wizard-match-hint');
+
+      if (previewUrl && previewImg) {
+        previewImg.src = previewUrl;
+        currentWizardPreviewUrl = previewUrl;
+      }
+
+      // 1. 智慧官方原圖比對
+      // 若文字中出現高一籤表特徵
+      let matchedGrade = null;
+      let detectedTitle = '';
+      let detectedTeams = [];
+
+      const normText = rawText.replace(/\s+/g, '');
+      if (normText.includes('109') && normText.includes('資一甲') && normText.includes('電一甲')) {
+        matchedGrade = 'g1';
+        detectedTitle = '高一拔河賽 賽程表';
+        detectedTeams = [...OFFICIAL_PRESETS.g1.teams];
+        matchHint.innerHTML = '✨ <strong style="color:#16a34a;">已自動精準辨識為【高一官方拔河賽程表】！</strong>已為您自動對齊 15 支籤位！';
+      } else if (normText.includes('211') && normText.includes('206') && normText.includes('體二甲')) {
+        matchedGrade = 'g2';
+        detectedTitle = '高二拔河賽 賽程表';
+        detectedTeams = [...OFFICIAL_PRESETS.g2.teams];
+        matchHint.innerHTML = '✨ <strong style="color:#16a34a;">已自動精準辨識為【高二官方拔河賽程表】！</strong>已為您自動對齊 17 支籤位！';
+      } else if (normText.includes('304') && normText.includes('307') && normText.includes('電三甲')) {
+        matchedGrade = 'g3';
+        detectedTitle = '高三拔河賽 賽程表';
+        detectedTeams = [...OFFICIAL_PRESETS.g3.teams];
+        matchHint.innerHTML = '✨ <strong style="color:#16a34a;">已自動精準辨識為【高三官方拔河賽程表】！</strong>已為您自動對齊 13 支籤位！';
+      } else {
+        // 自訂圖檔辨識
+        detectedTeams = extractTeamsFromText(rawText);
+        if (/高一/.test(rawText)) {
+          matchedGrade = 'g1';
+          detectedTitle = '高一拔河賽 賽程表';
+        } else if (/高二/.test(rawText)) {
+          matchedGrade = 'g2';
+          detectedTitle = '高二拔河賽 賽程表';
+        } else if (/高三/.test(rawText)) {
+          matchedGrade = 'g3';
+          detectedTitle = '高三拔河賽 賽程表';
+        } else {
+          matchedGrade = currentGrade;
+          detectedTitle = (allGradesData[currentGrade] ? allGradesData[currentGrade].title : '拔河賽 賽程表');
+        }
+        matchHint.innerHTML = `已自檔案中辨識出 ${detectedTeams.length} 支隊伍籤位，請核對或微調。`;
+      }
+
+      if (gradeSelect && matchedGrade) gradeSelect.value = matchedGrade;
+      if (titleInput) titleInput.value = detectedTitle || (allGradesData[currentGrade]?.title || '賽程表');
+      if (textarea) textarea.value = detectedTeams.join('\n');
+
+      updateWizardTeamCount();
+
+      contentSection.style.display = 'block';
+      submitBtn.style.display = 'inline-block';
+    }
+
+    function updateWizardTeamCount() {
+      const textarea = document.getElementById('wizard-teams-textarea');
+      const badge = document.getElementById('wizard-team-count-badge');
+      const hint = document.getElementById('wizard-topology-hint');
+      const lines = textarea.value.split(/[\r\n,，]+/).map(s => s.trim()).filter(Boolean);
+      const N = lines.length;
+
+      badge.textContent = `${N} 隊`;
+
+      if (N < 2) {
+        hint.style.background = '#fef2f2';
+        hint.style.borderColor = '#fecaca';
+        hint.style.color = '#991b1b';
+        hint.textContent = '⚠️ 最少需要 2 隊才能產製賽程表。';
+      } else {
+        hint.style.background = '#f0fdf4';
+        hint.style.borderColor = '#bbf7d0';
+        hint.style.color = '#166534';
+        const S = getNextPowerOfTwo(N);
+        const byes = S - N;
+        let byeDesc = byes > 0 ? `，第一輪包含 ${byes} 個輪空保送位` : '，無輪空';
+        hint.textContent = `✅ 共 ${N} 支籤位隊伍，點擊產製將構建出精確對稱之 ${S} 籤樹狀單淘汰賽程（包含冠亞軍決賽與季殿軍賽${byeDesc}）！`;
+      }
+    }
+
+    // 執行產製賽程表
+    function executeGenerateFromWizard() {
+      const titleInput = document.getElementById('wizard-title-input');
+      const gradeSelect = document.getElementById('wizard-grade-select');
+      const textarea = document.getElementById('wizard-teams-textarea');
+
+      const targetGrade = gradeSelect.value;
+      const title = titleInput.value.trim() || '賽程表';
+      const teams = textarea.value.split(/[\r\n,，]+/).map(s => s.trim()).filter(Boolean);
+
+      if (teams.length < 2) {
+        alert('參賽隊伍最少需要 2 隊！');
+        return;
+      }
+
+      if (!confirm(`確定要依此圖片資訊，產製【${title}】（共 ${teams.length} 隊籤位）嗎？\n（該組比分將重設並以全新籤表展開）`)) {
+        return;
+      }
+
+      // 套用至該組別
+      allGradesData[targetGrade] = {
+        title: title,
+        teams: teams,
+        results: {}
+      };
+
+      saveLocalBackup();
+      pendingGrades.add(targetGrade);
+      flushSync();
+
+      closeScheduleWizard();
+      switchGrade(targetGrade);
+
+      triggerConfetti();
+      updateStatusContent(`🎉 已依照圖片成功產製【${title}】賽程表！共 ${teams.length} 支隊伍籤位！`);
+    }
+
   </script>
 </body>
 </html>
